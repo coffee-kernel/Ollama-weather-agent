@@ -4,12 +4,13 @@ import requests
 import streamlit as st
 from typing import Annotated, Sequence
 from typing_extensions import TypedDict
+from dotenv import load_dotenv
 
-from langchain_ollama import ChatOllama  # Updated to ChatOllama for better agent compat
+from langchain_ollama import ChatOllama
 from langchain_core.tools import tool
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.checkpoint.memory import MemorySaver
-from langchain.agents import create_agent  # <-- FIXED: New import for v1.0
+from langchain.agents import create_agent
 
 # streamlit page config
 st.set_page_config(page_title="Ollama Trip Planner", page_icon="✈️", layout="wide")
@@ -23,29 +24,56 @@ def load_llm():
     print("Ollama LLM loaded successfully!")
     return llm
 
+# load .env
+load_dotenv()
+
+# Load LLM
 llm = load_llm()
 
-# Step 2: Define Tools (Unchanged)
+# Define Tools
 @tool
 def get_weather(city: str) -> str:
-    """Fetches current weather for a city using Open-Meteo (free, no key)."""
+    """Fetches current weather for a city using Tomorrow.io API."""
+    API_KEY = os.getenv('TOMORROW_API_KEY')
+    
     try:
-        geo_url = f"https://nominatim.openstreetmap.org/search?q={city}&format=json&limit=1"
-        geo_headers = {"User-Agent": "WeatherAgent/1.0"}
-        geo_response = requests.get(geo_url, headers=geo_headers).json()
-        if not geo_response:
+        geo_url = f"https://api.tomorrow.io/v4/locations/search"
+        geo_params = {
+            "text": city,
+            "limit": 1,
+            "apikey": API_KEY
+        }
+        geo_response = requests.get(geo_url, para=geo_params).json()
+        if not geo_response.get('data') or not geo_response['data']:
             return f"Could not find location for {city}. Try a different spelling."
-        lat, lon = float(geo_response[0]["lat"]), float(geo_response[0]["lon"])
+        location_data = geo_response['data'][0]
+        lat, lon = location_data['latitude'], location_data['longitude']
         
-        weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true&temperature_unit=celsius&wind_speed_unit=kmh&timezone=auto"
-        weather_response = requests.get(weather_url).json()
-        current = weather_response["current_weather"]
+        weather_url = f"https://api.tomorrow.io/v4/weather/realtime"
+        weather_params = {
+            "location": f"{lat},{lon}",
+            "units": "metric",
+            "apikey": API_KEY
+        }
+        
+        weather_response = requests.get(weather_url, params=weather_params).json()
+        
+        if 'data' not in weather_response or 'values' not in weather_response['data']:
+            return ValueError("Invalid weather data received.")
+        
+        current = weather_response["data"]["values"]
         temp = current["temperature"]
         windspeed = current["windspeed"]
-        weather_code = current["weather_code"]
+        weather_code = current.get("weatherCode", "unknown")
         
-        conditions = {0: "Clear skies", 1: "Mainly clear", 3: "Rain", 45: "Fog", 61: "Light rain"}
-        condition = conditions.get(weather_code, "Partly cloudy")
+        conditions = {
+            "clear": "Clear skies",
+            "partly-cloudy-day": "Partly cloudy",
+            "rain": "Rain",
+            "fog": "Foggy",
+            "light-rain": "Light rain",
+        }
+        condition = conditions.get(weather_code, f"COnditions: {weather_code}")
         
         return f"Weather in {city} ({lat:.2f}°{'S' if lat < 0 else 'N'}, {lon:.2f}°{'W' if lon < 0 else 'E'}): {temp}°C, {condition}, wind {windspeed} km/h."
     except Exception as e:
@@ -64,11 +92,11 @@ def suggest_activities(city: str, weather_desc: str) -> str:
 @tool
 def book_flight(origin: str, destination: str, date: str) -> str:
     """Mocks booking a flight."""
-    return f"Flight booked: {origin} → {destination} on {date}. Confirmation: FLIGHT-{random.randint(10000, 99999)}. Cost: ~$400 (mock)."
+    return f"Flight booked: {origin} → {destination} on {date}. Confirmation: FLIGHT-{random.randint(10000, 99999)}."
 
 tools = [get_weather, suggest_activities, book_flight]
 
-# Step 3: Build the Agent (Cached)
+# Build the Agent (Cached)
 @st.cache_resource
 def build_agent():
     checkpointer = MemorySaver()
@@ -89,9 +117,9 @@ app, checkpointer = build_agent()
 
 # Step 4: Streamlit Chat Interface
 if "messages" not in st.session_state:
-    st.session_state.messages = []  # Local chat history for display
+    st.session_state.messages = []
 if "config" not in st.session_state:
-    st.session_state.config = {"configurable": {"thread_id": "web_session_1"}}  # LangGraph thread for memory
+    st.session_state.config = {"configurable": {"thread_id": "web_session_1"}}
 
 # Sidebar for debug
 debug = st.sidebar.checkbox("Show Agent Reasoning (Verbose)")
@@ -119,10 +147,8 @@ if prompt := st.chat_input("Ask about a trip, e.g., 'Weather in Paris? Plan a su
             response = app.invoke(input_message, st.session_state.config)
             agent_reply = response['messages'][-1].content
             
-            # Optional: Capture reasoning (if verbose/debug enabled)
             reasoning = ""
             if debug:
-                # Simulate verbose (in real, log from graph; here, mock for demo)
                 reasoning = "Thought: Decomposed query → Called get_weather → Synthesized plan."
             
             st.markdown(agent_reply)
