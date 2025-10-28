@@ -110,47 +110,116 @@ def build_agent():
 app, checkpointer = build_agent()
 
 # New: Gradio chat function
-def chat_with_agent(message, history, debug_mode):
+def chat_with_agent(message, history, debug_mode, edit_mode=False):
     """
-    Handles one chat turn: Invoke agent, format response (Gradio auto-appends to history).
-    - message: Current user input (str)
-    - history: List of past [[user_msg, bot_msg], ...] (for reference, but don't modify)
-    - debug_mode: Bool from checkbox
+    Handles chat: Append for normal, replace last [user, bot] for edit.
+    Returns updated history (Gradio displays it).
     """
-    # Prepare input for agent
+    # Prepare input for agent 
     input_message = {"messages": [HumanMessage(content=message)]}
     
-    # Invoke agent with persistent config
+    # Invoke agent with persistent config 
     response = app.invoke(input_message, global_agent_config)
-    agent_reply = response['messages'][-1].content
+    agent_reply = str(response['messages'][-1].content)
     
-    # Mock reasoning
+    # Add reasoning if debug 
     reasoning = ""
     if debug_mode:
         reasoning = "Thought: Decomposed query → Called get_weather → Synthesized plan."
         agent_reply += f"\n\n<details><summary>Agent Thoughts</summary>{reasoning}</details>"
     
-    return agent_reply
+    if edit_mode and history and len(history) > 0:
+        history[-1] = [message, agent_reply]
+    else:
+        history.append([message, agent_reply])
+    
+    return history
 
 def create_gradio_interface():
-    # Debug checkbox
-    debug_checkbox = gr.Checkbox(label="Show Agent Reasoning (Verbose)", value=False)
+    with gr.Blocks(title="Trip Planning Agent", theme=gr.themes.Soft()) as demo:
+        gr.Markdown("# Trip Planning Agent")
+        gr.Markdown("Ask about weather, activities, or book flights! E.g., 'Weather in Paris?'")
+        
+        # Debug checkbox
+        debug_checkbox = gr.Checkbox(label="Show Agent Reasoning (Verbose)", value=False)
+        
+        # Hidden state for edit mode
+        editing_state = gr.State(False)
+        
+        # Chatbot for history display
+        chatbot = gr.Chatbot(
+            height=400,
+            show_label=False,
+            avatar_images=(
+                "./Assets/user_avatar.png",
+                "./Assets/bot.png"
+            )
+        )
+        
+        with gr.Row():
+            msg_input = gr.Textbox(
+                label="Your Message",
+                placeholder="Type here...",
+                scale=4,
+                show_label=False
+            )
+            send_btn = gr.Button("Send", variant="primary", scale=1)
+            edit_btn = gr.Button("Edit Last", visible=False, scale=1)
+            clear_btn = gr.Button("Clear Chat", variant="secondary", scale=1)
+        
+        gr.Examples(
+            examples=[
+                ["Weather in Paris?"],
+                ["Plan a sunny day in Tokyo"],
+                ["Book flight from NYC to LA on Oct 30"]
+            ],
+            inputs=[msg_input],
+            label="Quick Starts"
+        )
+        
+        def process_message(msg, history, debug, editing):
+            if not msg.strip():
+                return history, "", gr.update(visible=bool(history)), False
+            # Call agent with edit_mode
+            updated_history = chat_with_agent(msg, history, debug, edit_mode=editing)
+            new_edit_visible = gr.update(visible=bool(updated_history))
+            new_edit_btn = gr.update(value="Edit Last") if not editing else gr.update(value="Edit Last")
+            return updated_history, "", new_edit_visible, new_edit_btn, False  # Reset editing
+        
+        send_btn.click(
+            process_message,
+            inputs=[msg_input, chatbot, debug_checkbox, editing_state],
+            outputs=[chatbot, msg_input, edit_btn, edit_btn, editing_state]  # Last two for btn update + state reset
+        )
+        msg_input.submit(
+            process_message,
+            inputs=[msg_input, chatbot, debug_checkbox, editing_state],
+            outputs=[chatbot, msg_input, edit_btn, edit_btn, editing_state]
+        )
+        
+        # Event: Edit Last button
+        def start_edit(history):
+            if not history or len(history) == 0:
+                return history, "", gr.update(visible=False), False
+            last_user_msg = history[-1][0]
+            return history, last_user_msg, gr.update(value="Update", visible=True), True
+        
+        edit_btn.click(
+            start_edit,
+            inputs=[chatbot],
+            outputs=[chatbot, msg_input, edit_btn, editing_state]
+        )
+        
+        # Event: Clear chat
+        def clear_all():
+            return [], "", gr.update(visible=False), False
+        
+        clear_btn.click(
+            clear_all,
+            outputs=[chatbot, msg_input, edit_btn, editing_state]
+        )
     
-    # Chat interface: Uses our chat function
-    chatbot = gr.ChatInterface(
-        fn=chat_with_agent,
-        title="Trip Planning Agent",
-        description="Ask about weather, activities, or book flights! E.g., 'Weather in Paris?'",
-        examples=[
-            ["What's the weather like in Tokyo?", False],
-            ["Suggest activities in New York if it's sunny.", False],
-            ["Book a flight from LA to Miami on Dec 20.", False],
-        ],
-        cache_examples=False,
-        additional_inputs=[debug_checkbox],
-        theme=gr.themes.Soft(),
-    )
-    return chatbot
+    return demo
 
 if __name__ == "__main__":
     demo = create_gradio_interface()
