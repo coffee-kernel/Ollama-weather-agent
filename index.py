@@ -1,7 +1,7 @@
 import os
 import random
 import requests
-import streamlit as st
+import gradio as gr
 from typing import Annotated, Sequence
 from typing_extensions import TypedDict
 from dotenv import load_dotenv
@@ -12,15 +12,8 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langchain.agents import create_agent
 
-# streamlit page config
-st.set_page_config(page_title="Ollama Trip Planner", page_icon="✈️", layout="wide")
-st.title("✈️ Ollama Trip Planner Agent with LangGraph v1.0")
-st.markdown("Chat with an autonomous agent that plans trips using Ollama LLM and LangGraph v1.0!")
-
-@st.cache_resource
 def load_llm():
     llm = ChatOllama(model="llama3.2", temperature=0)
-    st.success("Ollama LLM loaded successfully!")
     print("Ollama LLM loaded successfully!")
     return llm
 
@@ -96,8 +89,9 @@ def book_flight(origin: str, destination: str, date: str) -> str:
 
 tools = [get_weather, suggest_activities, book_flight]
 
-# Build the Agent (Cached)
-@st.cache_resource
+global_agent_config = {"configurable": {"thread_id": "web_session_1"}}
+
+# Build the Agent 
 def build_agent():
     checkpointer = MemorySaver()
     system_prompt = """You are an autonomous trip planning agent. For any query:
@@ -113,52 +107,52 @@ def build_agent():
     )
     return app, checkpointer
 
-app, checkpointer = build_agent()
+app, checkpointer = build_agent()  # Unchanged
 
-# Step 4: Streamlit Chat Interface
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "config" not in st.session_state:
-    st.session_state.config = {"configurable": {"thread_id": "web_session_1"}}
+# New: Gradio chat function
+def chat_with_agent(message, history, debug_mode):
+    """
+    Handles one chat turn: Invoke agent, format response (Gradio auto-appends to history).
+    - message: Current user input (str)
+    - history: List of past [[user_msg, bot_msg], ...] (for reference, but don't modify)
+    - debug_mode: Bool from checkbox
+    """
+    # Prepare input for agent (unchanged)
+    input_message = {"messages": [HumanMessage(content=message)]}
+    
+    # Invoke agent with persistent config (unchanged)
+    response = app.invoke(input_message, global_agent_config)
+    agent_reply = response['messages'][-1].content
+    
+    # Mock reasoning (unchanged, but now baked into reply str)
+    reasoning = ""
+    if debug_mode:
+        reasoning = "Thought: Decomposed query → Called get_weather → Synthesized plan."
+        agent_reply += f"\n\n<details><summary>Agent Thoughts</summary>{reasoning}</details>"
+    
+    # FIXED: Return ONLY the reply str—Gradio handles history append as [[message, agent_reply]]
+    return agent_reply  # Just str! No (history, "")
 
-# Sidebar for debug
-debug = st.sidebar.checkbox("Show Agent Reasoning (Verbose)")
-st.sidebar.markdown("**Tips:** Refresh to reset chat. Ensure Ollama is running.")
+def create_gradio_interface():
+    # Debug checkbox
+    debug_checkbox = gr.Checkbox(label="Show Agent Reasoning (Verbose)", value=False)
+    
+    # Chat interface: Uses our chat function
+    chatbot = gr.ChatInterface(
+        fn=chat_with_agent,
+        title="Trip Planning Agent",
+        description="Ask about weather, activities, or book flights! E.g., 'Weather in Paris?'",
+        examples=[
+            ["What's the weather like in Tokyo?", False],
+            ["Suggest activities in New York if it's sunny.", False],
+            ["Book a flight from LA to Miami on Dec 20.", False],
+        ],
+        cache_examples=False,
+        additional_inputs=[debug_checkbox],
+        theme=gr.themes.Soft(),
+    )
+    return chatbot
 
-# Display chat history
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-        if debug and message.get("reasoning"):
-            with st.expander("Agent Thoughts"):
-                st.markdown(message["reasoning"])
-
-# Chat input
-if prompt := st.chat_input("Ask about a trip, e.g., 'Weather in Paris? Plan a sunny day...'"):
-    # Add user message
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    # Generate response
-    with st.chat_message("assistant"):
-        with st.spinner("Planning your trip..."):
-            input_message = {"messages": [HumanMessage(content=prompt)]}
-            response = app.invoke(input_message, st.session_state.config)
-            agent_reply = response['messages'][-1].content
-            
-            reasoning = ""
-            if debug:
-                reasoning = "Thought: Decomposed query → Called get_weather → Synthesized plan."
-            
-            st.markdown(agent_reply)
-            if debug and reasoning:
-                with st.expander("Agent Thoughts"):
-                    st.markdown(reasoning)
-        
-        # Store in session
-        st.session_state.messages.append({
-            "role": "assistant", 
-            "content": agent_reply,
-            "reasoning": reasoning if debug else None
-        })
+if __name__ == "__main__":
+    demo = create_gradio_interface()
+    demo.launch()
