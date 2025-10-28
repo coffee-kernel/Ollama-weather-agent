@@ -107,7 +107,7 @@ def build_agent():
     )
     return app, checkpointer
 
-app, checkpointer = build_agent()  # Unchanged
+app, checkpointer = build_agent()
 
 # New: Gradio chat function
 def chat_with_agent(message, history, debug_mode):
@@ -117,21 +117,20 @@ def chat_with_agent(message, history, debug_mode):
     - history: List of past [[user_msg, bot_msg], ...] (for reference, but don't modify)
     - debug_mode: Bool from checkbox
     """
-    # Prepare input for agent (unchanged)
+    # Prepare input for agent
     input_message = {"messages": [HumanMessage(content=message)]}
     
-    # Invoke agent with persistent config (unchanged)
+    # Invoke agent with persistent config
     response = app.invoke(input_message, global_agent_config)
     agent_reply = response['messages'][-1].content
     
-    # Mock reasoning (unchanged, but now baked into reply str)
+    # Mock reasoning
     reasoning = ""
     if debug_mode:
         reasoning = "Thought: Decomposed query → Called get_weather → Synthesized plan."
         agent_reply += f"\n\n<details><summary>Agent Thoughts</summary>{reasoning}</details>"
     
-    # FIXED: Return ONLY the reply str—Gradio handles history append as [[message, agent_reply]]
-    return agent_reply  # Just str! No (history, "")
+    return agent_reply
 
 def create_gradio_interface():
     # Debug checkbox
